@@ -57,21 +57,50 @@
 # st.title("✅ MoEngage Campaign QA")
 # st.caption("Run pre-launch QA checks on your MoEngage campaigns — no terminal, no setup.")
 
+# # ---------------------------------------------------------------------------
+# # Sidebar: optional per-session credential override, so anyone can point
+# # this at a different MoEngage account without touching Streamlit secrets
+# # or redeploying. Left blank = falls back to the deployed default account.
+# # Nothing entered here is saved anywhere - it only lives for this browser
+# # session and is cleared on refresh.
+# # ---------------------------------------------------------------------------
+
+# with st.sidebar:
+#     st.header("MoEngage account")
+#     st.caption("Leave blank to use the default account configured for this app.")
+#     override_workspace_id = st.text_input("Workspace ID", value="", key="override_workspace_id")
+#     override_api_key = st.text_input("API Key", value="", type="password", key="override_api_key")
+#     override_data_center = st.text_input(
+#         "Data Center (e.g. 01)", value="", placeholder="01", key="override_data_center"
+#     )
+#     st.caption("These values are only used for your current session and are never saved.")
+
 # rules = load_rules()
+
+# if override_workspace_id.strip():
+#     rules["moengage"]["workspace_id"] = override_workspace_id.strip()
+# if override_api_key.strip():
+#     rules["moengage"]["api_key"] = override_api_key.strip()
+# if override_data_center.strip():
+#     rules["moengage"]["data_center"] = override_data_center.strip()
+
+# using_override = bool(override_workspace_id.strip() or override_api_key.strip())
+# if using_override:
+#     st.info("Using the MoEngage account entered in the sidebar for this session.", icon="🔑")
 
 # if not rules["moengage"]["workspace_id"] or not rules["moengage"]["api_key"]:
 #     st.error(
-#         "MoEngage credentials aren't configured yet. Whoever deployed this app needs to "
-#         "add MOENGAGE_WORKSPACE_ID, MOENGAGE_API_KEY, and MOENGAGE_DATA_CENTER in "
-#         "Streamlit secrets (see README.md)."
+#         "No MoEngage credentials available. Either enter them in the sidebar, or whoever "
+#         "deployed this app needs to add MOENGAGE_WORKSPACE_ID, MOENGAGE_API_KEY, and "
+#         "MOENGAGE_DATA_CENTER in Streamlit secrets (see README.md)."
 #     )
 #     st.stop()
 
 # col1, col2, col3 = st.columns(3)
 # with col1:
-#     status = st.selectbox("Campaign status", ["SCHEDULED", "ACTIVE", "COMPLETED", "DRAFT"], index=0)
+#     status = st.selectbox("Campaign status", ["SCHEDULED", "ACTIVE", "SENT", "DRAFT"], index=0)
 # with col2:
-#     channel = st.selectbox("Channel", ["All", "PUSH", "EMAIL", "SMS"], index=0)
+#     channel = st.selectbox("Channel", ["PUSH", "EMAIL"], index=0)
 # with col3:
 #     limit = st.number_input("Max campaigns to check", min_value=1, max_value=15, value=15)
 
@@ -134,6 +163,7 @@
 # st.divider()
 # with st.expander("⚙ Current QA rules (edit qa_rules.json to change these)"):
 #     st.json(rules)
+
 
 
 
@@ -238,9 +268,23 @@ if not rules["moengage"]["workspace_id"] or not rules["moengage"]["api_key"]:
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    status = st.selectbox("Campaign status", ["SCHEDULED", "ACTIVE", "SENT", "DRAFT"], index=0)
+    status = st.selectbox(
+        "Campaign status",
+        ["SCHEDULED", "SENT", "ACTIVE", "PAUSED", "STOPPED"],
+        index=0,
+        help=(
+            "SCHEDULED and SENT are confirmed working for this account. "
+            "ACTIVE/PAUSED/STOPPED are included per MoEngage's general status list "
+            "but haven't been confirmed against your data yet - if one errors, "
+            "run debug_dump_campaign.py --list-statuses to see exactly what your "
+            "account returns. Draft campaigns aren't queryable through this API "
+            "at all (MoEngage only exposes drafts one-by-one via a different, "
+            "newer API once you already know the campaign ID) - so there's no "
+            "Draft option here."
+        ),
+    )
 with col2:
-    channel = st.selectbox("Channel", ["PUSH", "EMAIL"], index=0)
+    channel = st.selectbox("Channel", ["All", "PUSH", "EMAIL"], index=0)
 with col3:
     limit = st.number_input("Max campaigns to check", min_value=1, max_value=15, value=15)
 
