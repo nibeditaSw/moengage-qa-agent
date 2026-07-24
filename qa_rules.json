@@ -81,8 +81,8 @@
   },
   "slack_webhook_url": "",
   "moengage": {
-    "data_center": "04",
-    "workspace_id": "BQV2CNL3GIYJT9X8V8LHTF22",
-    "api_key": "JS7MLKSYJQD2"
+    "data_center": "",
+    "workspace_id": "",
+    "api_key": ""
   }
 }
