@@ -238,9 +238,9 @@ if not rules["moengage"]["workspace_id"] or not rules["moengage"]["api_key"]:
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    status = st.selectbox("Campaign status", ["SCHEDULED", "ACTIVE", "COMPLETED", "DRAFT"], index=0)
+    status = st.selectbox("Campaign status", ["SCHEDULED", "ACTIVE", "SENT", "DRAFT"], index=0)
 with col2:
-    channel = st.selectbox("Channel", ["All", "PUSH", "EMAIL", "SMS"], index=0)
+    channel = st.selectbox("Channel", ["All", "PUSH", "EMAIL"], index=0)
 with col3:
     limit = st.number_input("Max campaigns to check", min_value=1, max_value=15, value=15)
 
