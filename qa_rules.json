@@ -1,0 +1,88 @@
+{
+  "naming_convention": {
+    "enabled": true,
+    "regex": "^CLM_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_(push|emailer|sms)_([1-9]|[12][0-9]|3[01])/([1-9]|1[0-2])$",
+    "regex_flags": "IGNORECASE",
+    "example_push": "CLM_P75OFF_Registered_NotPurchased_push_25/7",
+    "example_emailer": "CLM_P75OFF_Registered_NotPurchased_Emailer_13/8",
+    "example": "CLM_P75OFF_Registered_NotPurchased_push_25/7",
+    "note": "Format: CLM_<creativename>_<cohortname>_<channel-token>_date/month. Channel-token is 'push' for Push and 'Emailer' for Email - separate from the API's 'channel' field which returns 'PUSH'/'EMAIL'."
+  },
+  "tags_check": {
+    "enabled": true,
+    "min_tags": 1,
+    "note": "Flags campaigns with no tags at all - tags are how you filter/report on campaigns later, so an untagged campaign is a QA gap."
+  },
+  "segment_sanity": {
+    "enabled": true,
+    "flag_if_all_user_campaign_without_tag": "broadcast_approved",
+    "flag_if_no_included_filters": true,
+    "note": "Flags all-user campaigns missing an approval tag, and flags targeted campaigns that somehow have zero included audience filters (likely a targeting mistake)."
+  },
+  "content_check": {
+    "enabled": true,
+    "applies_to_channels": ["PUSH", "EMAIL", "SMS"],
+    "min_total_content_length": 200,
+    "note": "For Push: checks title/message aren't empty per platform (android/ios/web). For Email/SMS: does a generic check that there's a reasonable amount of extracted text content (catches an accidentally-empty template)."
+  },
+  "control_group_check": {
+    "enabled": true,
+    "flag_if_no_control_group": true,
+    "note": "Flags campaigns where neither global nor campaign-level control group is enabled - meaning there's no way to measure this campaign's incremental impact. Disable this if most of your campaigns intentionally skip control groups."
+  },
+  "conversion_goal_check": {
+    "enabled": true,
+    "require_at_least_one_goal": true,
+    "require_exactly_one_primary_goal": true,
+    "note": "Flags campaigns with zero conversion goals, or with zero/multiple goals marked as primary."
+  },
+  "delivery_controls_check": {
+    "enabled": true,
+    "flag_if_ignore_frequency_capping": true,
+    "flag_if_throttle_rpm_zero": true,
+    "flag_if_bypass_dnd": false,
+    "note": "bypass_dnd flagging is OFF - it's intentional/standard on this team's Fixed-timing campaigns. Set flag_if_bypass_dnd to true if you ever want it back (e.g. to catch it being on for a non-time-critical campaign by mistake)."
+  },
+  "utm_required": {
+    "enabled": false,
+    "applies_to_channels": ["EMAIL"],
+    "required_fields": ["utm_source", "utm_medium", "utm_campaign"],
+    "note": "Disabled per request. Re-enable (set enabled: true) if you want this back."
+  },
+  "utm_mismatch_check": {
+    "enabled": false,
+    "applies_to_channels": ["EMAIL"],
+    "fields_to_compare": ["utm_source", "utm_medium", "utm_campaign"],
+    "case_sensitive": false,
+    "note": "Disabled per request. Re-enable if you want to catch drift between campaign-level UTM template and UTMs baked into body links."
+  },
+  "personalization_tokens": {
+    "enabled": false,
+    "flag_unresolved_jinja": true,
+    "note": "Disabled per request."
+  },
+  "link_check": {
+    "enabled": false,
+    "timeout_seconds": 6,
+    "flag_status_codes_above": 399,
+    "note": "Disabled per request - was generating noise from LinkedIn/TikTok blocking bot requests. Re-enable if useful, ideally with a domain ignore-list for social platforms."
+  },
+  "compliance_footer": {
+    "enabled": false,
+    "applies_to_channels": ["EMAIL"],
+    "required_any_of": ["unsubscribe", "opt out", "opt-out", "manage preferences"],
+    "note": "Disabled per request."
+  },
+  "schedule_sanity": {
+    "enabled": false,
+    "flag_if_start_time_in_past": true,
+    "flag_send_hour_outside_range": { "enabled": true, "start_hour_utc": 2, "end_hour_utc": 18 },
+    "note": "Disabled per request."
+  },
+  "slack_webhook_url": "",
+  "moengage": {
+    "data_center": "",
+    "workspace_id": "",
+    "api_key": ""
+  }
+}
