@@ -98,9 +98,23 @@
 
 # col1, col2, col3 = st.columns(3)
 # with col1:
-#     status = st.selectbox("Campaign status", ["SCHEDULED", "ACTIVE", "SENT", "DRAFT"], index=0)
+#     status = st.selectbox(
+#         "Campaign status",
+#         ["SCHEDULED", "SENT", "ACTIVE", "PAUSED", "STOPPED"],
+#         index=0,
+#         help=(
+#             "SCHEDULED and SENT are confirmed working for this account. "
+#             "ACTIVE/PAUSED/STOPPED are included per MoEngage's general status list "
+#             "but haven't been confirmed against your data yet - if one errors, "
+#             "run debug_dump_campaign.py --list-statuses to see exactly what your "
+#             "account returns. Draft campaigns aren't queryable through this API "
+#             "at all (MoEngage only exposes drafts one-by-one via a different, "
+#             "newer API once you already know the campaign ID) - so there's no "
+#             "Draft option here."
+#         ),
+#     )
 # with col2:
-#     channel = st.selectbox("Channel", ["PUSH", "EMAIL"], index=0)
+#     channel = st.selectbox("Channel", ["All", "PUSH", "EMAIL"], index=0)
 # with col3:
 #     limit = st.number_input("Max campaigns to check", min_value=1, max_value=15, value=15)
 
@@ -163,9 +177,6 @@
 # st.divider()
 # with st.expander("⚙ Current QA rules (edit qa_rules.json to change these)"):
 #     st.json(rules)
-
-
-
 
 
 """
@@ -270,21 +281,21 @@ col1, col2, col3 = st.columns(3)
 with col1:
     status = st.selectbox(
         "Campaign status",
-        ["SCHEDULED", "SENT", "ACTIVE", "PAUSED", "STOPPED"],
+        ["SCHEDULED", "DRAFT", "SENT", "ACTIVE", "PAUSED", "SENDING", "STOPPED", "ARCHIVED"],
         index=0,
         help=(
-            "SCHEDULED and SENT are confirmed working for this account. "
-            "ACTIVE/PAUSED/STOPPED are included per MoEngage's general status list "
-            "but haven't been confirmed against your data yet - if one errors, "
-            "run debug_dump_campaign.py --list-statuses to see exactly what your "
-            "account returns. Draft campaigns aren't queryable through this API "
-            "at all (MoEngage only exposes drafts one-by-one via a different, "
-            "newer API once you already know the campaign ID) - so there's no "
-            "Draft option here."
+            "These are MoEngage's official V5 status values. SCHEDULED, SENT, and "
+            "DRAFT are confirmed working for this account - others are included "
+            "per MoEngage's documented status list but haven't all been individually "
+            "confirmed against your data. If one errors, run "
+            "debug_dump_campaign.py --list-statuses to see exactly what your account "
+            "returns. Note: Draft campaigns are often missing lots of fields by "
+            "design (that's what makes them drafts) - most of the QA checks below "
+            "will flag what's still missing, which doubles as a pre-publish checklist."
         ),
     )
 with col2:
-    channel = st.selectbox("Channel", ["All", "PUSH", "EMAIL"], index=0)
+    channel = st.selectbox("Channel", ["All", "PUSH", "EMAIL", "SMS"], index=0)
 with col3:
     limit = st.number_input("Max campaigns to check", min_value=1, max_value=15, value=15)
 
