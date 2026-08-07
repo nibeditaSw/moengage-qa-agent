@@ -10,10 +10,10 @@
         "note": "Format: CLM_<creativename>_<cohortname>_<channel-token>_date/month. Channel-token is 'push' for Push and 'Emailer' for Email - separate from the API's 'channel' field which returns 'PUSH'/'EMAIL'."
       },
       {
-        "name": "ADH client (SMS/Email)",
-        "regex": "^ADH_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_OMNI_(SMS|EMAIL)_WK[0-9]{1,2}_[0-9]{8}$",
+        "name": "ADH client (SMS/Email/WhatsApp)",
+        "regex": "^ADH_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_OMNI_(SMS|EMAIL|WA)_WK[0-9]{1,2}_[0-9]{8}$",
         "example": "ADH_AND_CAMPAIGNLAUNCHAFTERH_DORMANT_NORTHREGULAR_OMNI_SMS_WK19_07082026",
-        "note": "Format: ADH_<BrandName>_<Creative>_<Cohort[_Region]>_OMNI_<Channel>_WK<week>_<DDMMYYYY>. OMNI is a fixed literal segment (ignored for meaning, but required in the name). Confirmed against 2 real examples (one SMS, one Email) - flag if a legitimately-named campaign from this client ever gets rejected, since this was built from field descriptions rather than a large sample."
+        "note": "Format: ADH_<BrandName>_<Creative>_<Cohort[_Region]>_OMNI_<Channel>_WK<week>_<DDMMYYYY>. OMNI is a fixed literal segment (ignored for meaning, but required in the name). Channel token is 'SMS'/'EMAIL'/'WA' (WA = WhatsApp) - separate from the API's 'channel' field which returns 'WHATSAPP'. Confirmed against 3 real examples (SMS, Email, WhatsApp) - flag if a legitimately-named campaign from this client ever gets rejected, since this was built from field descriptions rather than a large sample."
       }
     ],
     "note": "A campaign passes if its name matches ANY pattern above - lets multiple clients/teams with different naming conventions share this same QA tool without conflicting."
