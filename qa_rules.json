@@ -31,9 +31,14 @@
   },
   "content_check": {
     "enabled": true,
-    "applies_to_channels": ["PUSH", "EMAIL", "SMS"],
+    "applies_to_channels": ["PUSH", "EMAIL", "SMS", "WHATSAPP"],
     "min_total_content_length": 200,
-    "note": "For Push: checks title/message aren't empty per platform (android/ios/web). For Email/SMS: does a generic check that there's a reasonable amount of extracted text content (catches an accidentally-empty template)."
+    "min_total_content_length_by_channel": {
+      "EMAIL": 200,
+      "SMS": 10,
+      "WHATSAPP": 10
+    },
+    "note": "For Push: checks title/message aren't empty per platform (android/ios/web). For Email/SMS/WhatsApp: generic check that there's a reasonable amount of extracted text content (catches an accidentally-empty template). Length threshold is per-channel since SMS/WhatsApp messages are naturally short - falls back to min_total_content_length if a channel isn't listed in min_total_content_length_by_channel."
   },
   "control_group_check": {
     "enabled": true,
