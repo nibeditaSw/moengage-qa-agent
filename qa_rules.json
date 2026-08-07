@@ -1,12 +1,22 @@
 {
   "naming_convention": {
     "enabled": true,
-    "regex": "^CLM_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_(push|emailer|sms)_([1-9]|[12][0-9]|3[01])/([1-9]|1[0-2])$",
     "regex_flags": "IGNORECASE",
-    "example_push": "CLM_P75OFF_Registered_NotPurchased_push_25/7",
-    "example_emailer": "CLM_P75OFF_Registered_NotPurchased_Emailer_13/8",
-    "example": "CLM_P75OFF_Registered_NotPurchased_push_25/7",
-    "note": "Format: CLM_<creativename>_<cohortname>_<channel-token>_date/month. Channel-token is 'push' for Push and 'Emailer' for Email - separate from the API's 'channel' field which returns 'PUSH'/'EMAIL'."
+    "patterns": [
+      {
+        "name": "Standard (CLM prefix)",
+        "regex": "^CLM_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_(push|emailer|sms)_([1-9]|[12][0-9]|3[01])/([1-9]|1[0-2])$",
+        "example": "CLM_P75OFF_Registered_NotPurchased_push_25/7",
+        "note": "Format: CLM_<creativename>_<cohortname>_<channel-token>_date/month. Channel-token is 'push' for Push and 'Emailer' for Email - separate from the API's 'channel' field which returns 'PUSH'/'EMAIL'."
+      },
+      {
+        "name": "ADH client (SMS/Email)",
+        "regex": "^ADH_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_OMNI_(SMS|EMAIL)_WK[0-9]{1,2}_[0-9]{8}$",
+        "example": "ADH_AND_CAMPAIGNLAUNCHAFTERH_DORMANT_NORTHREGULAR_OMNI_SMS_WK19_07082026",
+        "note": "Format: ADH_<BrandName>_<Creative>_<Cohort[_Region]>_OMNI_<Channel>_WK<week>_<DDMMYYYY>. OMNI is a fixed literal segment (ignored for meaning, but required in the name). Confirmed against 2 real examples (one SMS, one Email) - flag if a legitimately-named campaign from this client ever gets rejected, since this was built from field descriptions rather than a large sample."
+      }
+    ],
+    "note": "A campaign passes if its name matches ANY pattern above - lets multiple clients/teams with different naming conventions share this same QA tool without conflicting."
   },
   "tags_check": {
     "enabled": true,
@@ -81,7 +91,7 @@
   },
   "slack_webhook_url": "",
   "moengage": {
-    "data_center": "",
+    "data_center": "01",
     "workspace_id": "",
     "api_key": ""
   }
