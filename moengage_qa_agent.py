@@ -2,16 +2,18 @@
 # """
 # MoEngage Campaign QA Agent
 # ---------------------------
-# Pulls campaigns from MoEngage (via the Search Campaigns API) and runs a set
-# of pre-launch quality checks against them: naming convention, UTM params,
-# personalization token sanity, broken links, compliance footer (email),
-# schedule sanity, and segment sanity.
+# Pulls campaigns from MoEngage (via the V5 Search Campaigns API) and runs a
+# set of pre-launch quality checks against them: naming convention, tags,
+# segments, content completeness, control group, conversion goals, delivery
+# controls, UTM params/mismatch, personalization token sanity, broken links,
+# compliance footer, and schedule sanity.
 
 # Results are printed to stdout, written to a JSON report, and optionally
 # posted to Slack via an incoming webhook.
 
 # Docs referenced:
-#   https://www.moengage.com/docs/api/get-campaign-details/search-campaigns
+#   https://www.moengage.com/docs/api/get-campaign-details/search-campaigns-v5
+#   https://www.moengage.com/docs/api/campaigns/search-campaigns-v5-migration
 #   https://www.moengage.com/docs/api/introduction  (auth + data centers)
 
 # Usage:
@@ -31,6 +33,7 @@
 # import os
 # import re
 # import sys
+# import uuid
 # from datetime import datetime, timezone
 # from pathlib import Path
 # from urllib.parse import urlparse, parse_qs
@@ -72,18 +75,32 @@
 # # ---------------------------------------------------------------------------
 
 # def fetch_campaigns(config, status=None, channel=None, limit=15, page=1):
-#     """Calls POST /campaigns/search and returns the list of campaigns."""
+#     """Calls POST /v5/campaigns/search and returns the list of campaigns.
+
+#     V5 (not V1) is used because it's the only version that returns Draft
+#     campaigns - and only when "DRAFT" is explicitly passed in
+#     campaign_fields.status. V1 excludes drafts entirely.
+
+#     Response shape differs from V1: campaigns are nested under
+#     data.campaigns instead of being a top-level list, so we unwrap that
+#     here to keep this function's return value identical either way -
+#     everything downstream (checks, debug scripts, the Streamlit app)
+#     doesn't need to know or care which API version is being used.
+#     """
 #     dc = config["moengage"]["data_center"]
 #     workspace_id = config["moengage"]["workspace_id"]
 #     api_key = config["moengage"]["api_key"]
 
-#     url = f"https://api-{dc}.moengage.com/core-services/v1/campaigns/search"
+#     url = f"https://api-{dc}.moengage.com/v5/campaigns/search"
 
 #     auth_string = base64.b64encode(f"{workspace_id}:{api_key}".encode()).decode()
+#     request_id = str(uuid.uuid4())
 #     headers = {
 #         "Content-Type": "application/json",
 #         "MOE-APPKEY": workspace_id,
 #         "Authorization": f"Basic {auth_string}",
+#         "X-MOE-Request-Id": request_id,      # required in V5, must match body.request_id if both set
+#         "Idempotency-Key": str(uuid.uuid4()),  # required on every POST in V5
 #     }
 
 #     campaign_fields = {}
@@ -93,17 +110,27 @@
 #         campaign_fields["channels"] = [channel]
 
 #     body = {
-#         "request_id": f"qa_agent_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+#         "request_id": request_id,
 #         "campaign_fields": campaign_fields,
 #         "limit": limit,
 #         "page": page,
 #     }
 
-#     resp = requests.post(url, headers=headers, json=body, timeout=15)
-#     if resp.status_code != 200:
-#         print(f"MoEngage API error {resp.status_code}: {resp.text}", file=sys.stderr)
-#         resp.raise_for_status()
-#     return resp.json()
+#     last_error = None
+#     for attempt in range(2):  # try once, then one retry on timeout
+#         try:
+#             resp = requests.post(url, headers=headers, json=body, timeout=30)
+#             if resp.status_code != 200:
+#                 print(f"MoEngage API error {resp.status_code}: {resp.text}", file=sys.stderr)
+#                 raise requests.exceptions.HTTPError(
+#                     f"{resp.status_code} error from MoEngage: {resp.text}", response=resp
+#                 )
+#             payload = resp.json()
+#             return payload.get("data", {}).get("campaigns", [])
+#         except requests.exceptions.Timeout as e:
+#             last_error = e
+#             continue  # retry once
+#     raise last_error
 
 
 # # ---------------------------------------------------------------------------
@@ -318,23 +345,170 @@
 #     issues = []
 #     seg = campaign.get("segmentation_details", {}) or {}
 #     tags = campaign.get("basic_details", {}).get("tags", []) or []
-#     if seg.get("is_all_user_campaign") and cfg["flag_if_all_user_campaign_without_tag"] not in tags:
+#     is_all_user = seg.get("is_all_user_campaign")
+
+#     if is_all_user and cfg["flag_if_all_user_campaign_without_tag"] not in tags:
 #         issues.append(
 #             "Campaign targets ALL users but is missing the "
 #             f"'{cfg['flag_if_all_user_campaign_without_tag']}' approval tag."
 #         )
+
+#     if cfg.get("flag_if_no_included_filters") and not is_all_user:
+#         included = (seg.get("included_filters") or {}).get("filters", [])
+#         if not included:
+#             issues.append(
+#                 "Campaign is not marked as an all-user campaign but has zero "
+#                 "included audience filters - check targeting, this may send to nobody."
+#             )
+#     return issues
+
+
+# def check_tags(campaign, rules):
+#     cfg = rules["tags_check"]
+#     if not cfg["enabled"]:
+#         return []
+#     tags = campaign.get("basic_details", {}).get("tags", []) or []
+#     if len(tags) < cfg.get("min_tags", 1):
+#         return [f"Campaign has no tags (found {len(tags)}, expected at least {cfg.get('min_tags', 1)})."]
+#     return []
+
+
+# def check_content_completeness(campaign, rules):
+#     cfg = rules["content_check"]
+#     if not cfg["enabled"]:
+#         return []
+#     channel = campaign.get("channel")
+#     if channel not in cfg.get("applies_to_channels", []):
+#         return []
+
+#     issues = []
+#     content_root = (campaign.get("campaign_content", {}) or {}).get("content", {}) or {}
+
+#     if channel == "PUSH":
+#         push = content_root.get("push", {}) or {}
+#         if not push:
+#             issues.append("No push content found for any platform.")
+#         for platform, plat_data in push.items():
+#             basic = (plat_data or {}).get("basic_details", {}) or {}
+#             title = (basic.get("title") or "").strip()
+#             message = (basic.get("message") or "").strip()
+#             if not title:
+#                 issues.append(f"[{platform}] push title is empty.")
+#             if not message:
+#                 issues.append(f"[{platform}] push message is empty.")
+#     elif channel == "EMAIL":
+#         email = content_root.get("email", {}) or {}
+#         if not email:
+#             issues.append("No email content block found.")
+#             return issues
+
+#         subject = (email.get("subject") or "").strip()
+#         preview_text = (email.get("preview_text") or "").strip()
+#         sender_name = (email.get("sender_name") or "").strip()
+#         from_address = (email.get("from_address") or "").strip()
+#         reply_to_address = (email.get("reply_to_address") or "").strip()
+#         html_content = (email.get("html_content") or "").strip()
+
+#         if not subject:
+#             issues.append("Email subject line is empty.")
+#         if not preview_text:
+#             issues.append("Email preview text is empty.")
+#         if not sender_name:
+#             issues.append("Email sender name is empty.")
+#         if not from_address:
+#             issues.append("Email from_address is empty.")
+#         if not reply_to_address:
+#             issues.append("Email reply_to_address is empty.")
+#         if len(html_content) < cfg.get("min_total_content_length", 200):
+#             issues.append(
+#                 f"Email html_content looks unusually short/empty "
+#                 f"({len(html_content)} chars, expected at least {cfg.get('min_total_content_length', 200)})."
+#             )
+#     else:
+#         # Generic fallback for other channels (e.g. SMS) whose exact schema
+#         # we haven't confirmed yet - checks there's a reasonable amount of text.
+#         channel_key = channel.lower()
+#         node = content_root.get(channel_key) or content_root
+#         texts = _extract_content_strings(node)
+#         total_len = sum(len(t.strip()) for t in texts)
+#         min_len = cfg.get("min_total_content_length", 200)
+#         if total_len < min_len:
+#             issues.append(
+#                 f"Content for {channel} looks unusually short or empty "
+#                 f"(extracted {total_len} chars, expected at least {min_len})."
+#             )
+#     return issues
+
+
+# def check_control_group(campaign, rules):
+#     cfg = rules["control_group_check"]
+#     if not cfg["enabled"]:
+#         return []
+#     cg = campaign.get("control_group_details", {}) or {}
+#     issues = []
+#     global_enabled = cg.get("is_global_control_group_enabled", False)
+#     campaign_enabled = cg.get("is_campaign_control_group_enabled", False)
+#     campaign_pct = cg.get("campaign_control_group_percentage", 0) or 0
+
+#     if cfg.get("flag_if_no_control_group") and not global_enabled and not campaign_enabled:
+#         issues.append(
+#             "Neither global nor campaign-level control group is enabled - "
+#             "no way to measure this campaign's incremental impact."
+#         )
+#     if campaign_enabled and campaign_pct <= 0:
+#         issues.append("Campaign-level control group is enabled but percentage is 0.")
+#     return issues
+
+
+# def check_conversion_goals(campaign, rules):
+#     cfg = rules["conversion_goal_check"]
+#     if not cfg["enabled"]:
+#         return []
+#     goals = (campaign.get("conversion_goal_details", {}) or {}).get("goals", []) or []
+#     issues = []
+
+#     if cfg.get("require_at_least_one_goal") and not goals:
+#         issues.append("No conversion goals configured for this campaign.")
+
+#     if cfg.get("require_exactly_one_primary_goal") and goals:
+#         primary_count = sum(1 for g in goals if g.get("is_primary_goal"))
+#         if primary_count == 0:
+#             issues.append("No conversion goal is marked as primary (need exactly one).")
+#         elif primary_count > 1:
+#             issues.append(f"{primary_count} conversion goals are marked primary - should be exactly one.")
+#     return issues
+
+
+# def check_delivery_controls(campaign, rules):
+#     cfg = rules["delivery_controls_check"]
+#     if not cfg["enabled"]:
+#         return []
+#     dc = campaign.get("delivery_controls", {}) or {}
+#     issues = []
+
+#     if cfg.get("flag_if_ignore_frequency_capping") and dc.get("ignore_frequency_capping"):
+#         issues.append("Campaign is set to ignore frequency capping - may over-message users.")
+#     if cfg.get("flag_if_throttle_rpm_zero") and not dc.get("campaign_throttle_rpm"):
+#         issues.append("Campaign throttle (campaign_throttle_rpm) is 0 or unset.")
+#     if cfg.get("flag_if_bypass_dnd") and dc.get("bypass_dnd"):
+#         issues.append("Campaign is set to bypass Do-Not-Disturb hours (bypass_dnd=true).")
 #     return issues
 
 
 # CHECKS = [
 #     check_naming_convention,
+#     check_tags,
+#     check_segment_sanity,
+#     check_content_completeness,
+#     check_control_group,
+#     check_conversion_goals,
+#     check_delivery_controls,
 #     check_utm_params,
 #     check_utm_mismatch,
 #     check_personalization_tokens,
 #     check_links,
 #     check_compliance_footer,
 #     check_schedule_sanity,
-#     check_segment_sanity,
 # ]
 
 
@@ -414,9 +588,6 @@
 #     main()
 
 
-
-
-
 #!/usr/bin/env python3
 """
 MoEngage Campaign QA Agent
@@ -494,18 +665,78 @@ def load_config():
 # ---------------------------------------------------------------------------
 
 def fetch_campaigns(config, status=None, channel=None, limit=15, page=1):
-    """Calls POST /v5/campaigns/search and returns the list of campaigns.
+    """Dispatches to V1 or V5 depending on what's being requested.
 
-    V5 (not V1) is used because it's the only version that returns Draft
-    campaigns - and only when "DRAFT" is explicitly passed in
-    campaign_fields.status. V1 excludes drafts entirely.
+    V1 is used by default because it works with the standard API key every
+    MoEngage account has (Settings > Account > APIs). V1 cannot return Draft
+    campaigns at all, though.
 
-    Response shape differs from V1: campaigns are nested under
-    data.campaigns instead of being a top-level list, so we unwrap that
-    here to keep this function's return value identical either way -
-    everything downstream (checks, debug scripts, the Streamlit app)
-    doesn't need to know or care which API version is being used.
+    V5 is only used when status is exactly "DRAFT", since that's the only
+    thing V1 can't do. V5 requires a *different* kind of API key - one
+    generated from Settings > Account > API keys, a page that is an Early
+    Access feature MoEngage enables per-account on request (contact your
+    MoEngage CSM or Support team to turn it on). If that key isn't set up
+    yet, V5 calls fail with a 401 - see _fetch_campaigns_v5 for the specific
+    error message this raises in that case.
+
+    Both return the same shape: a plain list of campaign dicts.
     """
+    if status == "DRAFT":
+        return _fetch_campaigns_v5(config, status=status, channel=channel, limit=limit, page=page)
+    return _fetch_campaigns_v1(config, status=status, channel=channel, limit=limit, page=page)
+
+
+def _fetch_campaigns_v1(config, status=None, channel=None, limit=15, page=1):
+    """Calls POST /core-services/v1/campaigns/search. Works with the standard
+    API key from Settings > Account > APIs. Cannot return Draft campaigns."""
+    dc = config["moengage"]["data_center"]
+    workspace_id = config["moengage"]["workspace_id"]
+    api_key = config["moengage"]["api_key"]
+
+    url = f"https://api-{dc}.moengage.com/core-services/v1/campaigns/search"
+
+    auth_string = base64.b64encode(f"{workspace_id}:{api_key}".encode()).decode()
+    headers = {
+        "Content-Type": "application/json",
+        "MOE-APPKEY": workspace_id,
+        "Authorization": f"Basic {auth_string}",
+    }
+
+    campaign_fields = {}
+    if status:
+        campaign_fields["status"] = [status]
+    if channel:
+        campaign_fields["channels"] = [channel]
+
+    body = {
+        "request_id": f"qa_agent_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+        "campaign_fields": campaign_fields,
+        "limit": limit,
+        "page": page,
+    }
+
+    last_error = None
+    for attempt in range(2):  # try once, then one retry on timeout
+        try:
+            resp = requests.post(url, headers=headers, json=body, timeout=30)
+            if resp.status_code != 200:
+                print(f"MoEngage API error {resp.status_code}: {resp.text}", file=sys.stderr)
+                raise requests.exceptions.HTTPError(
+                    f"{resp.status_code} error from MoEngage: {resp.text}", response=resp
+                )
+            return resp.json()
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            continue  # retry once
+    raise last_error
+
+
+def _fetch_campaigns_v5(config, status=None, channel=None, limit=15, page=1):
+    """Calls POST /v5/campaigns/search - the only way to retrieve Draft
+    campaigns. Requires an API key generated from Settings > Account >
+    API keys (an Early Access feature - contact MoEngage CSM/Support to
+    enable it if that page isn't visible in your dashboard yet). Using a
+    standard V1-style key here will fail with a 401."""
     dc = config["moengage"]["data_center"]
     workspace_id = config["moengage"]["workspace_id"]
     api_key = config["moengage"]["api_key"]
@@ -539,6 +770,16 @@ def fetch_campaigns(config, status=None, channel=None, limit=15, page=1):
     for attempt in range(2):  # try once, then one retry on timeout
         try:
             resp = requests.post(url, headers=headers, json=body, timeout=30)
+            if resp.status_code == 401:
+                raise requests.exceptions.HTTPError(
+                    "401 from MoEngage V5 API: your API key doesn't have V5/Campaigns "
+                    "permissions. Draft campaigns require a key generated from Settings > "
+                    "Account > API keys (with the Campaigns: View / Create & Manage / "
+                    "Create, Manage & Publish boxes checked) - this page is an Early Access "
+                    "feature; ask your MoEngage CSM or Support team to enable it for your "
+                    "account, then generate a key there and use it here.",
+                    response=resp,
+                )
             if resp.status_code != 200:
                 print(f"MoEngage API error {resp.status_code}: {resp.text}", file=sys.stderr)
                 raise requests.exceptions.HTTPError(
@@ -561,12 +802,14 @@ def check_naming_convention(campaign, rules):
     if not cfg["enabled"]:
         return []
     name = campaign.get("basic_details", {}).get("name", "")
-    pattern = cfg["regex"]
     flags = re.IGNORECASE if cfg.get("regex_flags") == "IGNORECASE" else 0
-    if not re.match(pattern, name, flags):
-        example = cfg.get("example_push", cfg.get("example", ""))
-        return [f"Name '{name}' doesn't match naming convention. Expected format like: {example}"]
-    return []
+
+    for pattern_cfg in cfg.get("patterns", []):
+        if re.match(pattern_cfg["regex"], name, flags):
+            return []  # matched at least one valid pattern - pass
+
+    examples = "; OR ".join(f"{p['name']}: {p['example']}" for p in cfg.get("patterns", []))
+    return [f"Name '{name}' doesn't match any known naming convention. Expected format like: {examples}"]
 
 
 def check_utm_params(campaign, rules):
