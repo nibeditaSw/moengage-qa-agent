@@ -75,18 +75,78 @@
 # # ---------------------------------------------------------------------------
 
 # def fetch_campaigns(config, status=None, channel=None, limit=15, page=1):
-#     """Calls POST /v5/campaigns/search and returns the list of campaigns.
+#     """Dispatches to V1 or V5 depending on what's being requested.
 
-#     V5 (not V1) is used because it's the only version that returns Draft
-#     campaigns - and only when "DRAFT" is explicitly passed in
-#     campaign_fields.status. V1 excludes drafts entirely.
+#     V1 is used by default because it works with the standard API key every
+#     MoEngage account has (Settings > Account > APIs). V1 cannot return Draft
+#     campaigns at all, though.
 
-#     Response shape differs from V1: campaigns are nested under
-#     data.campaigns instead of being a top-level list, so we unwrap that
-#     here to keep this function's return value identical either way -
-#     everything downstream (checks, debug scripts, the Streamlit app)
-#     doesn't need to know or care which API version is being used.
+#     V5 is only used when status is exactly "DRAFT", since that's the only
+#     thing V1 can't do. V5 requires a *different* kind of API key - one
+#     generated from Settings > Account > API keys, a page that is an Early
+#     Access feature MoEngage enables per-account on request (contact your
+#     MoEngage CSM or Support team to turn it on). If that key isn't set up
+#     yet, V5 calls fail with a 401 - see _fetch_campaigns_v5 for the specific
+#     error message this raises in that case.
+
+#     Both return the same shape: a plain list of campaign dicts.
 #     """
+#     if status == "DRAFT":
+#         return _fetch_campaigns_v5(config, status=status, channel=channel, limit=limit, page=page)
+#     return _fetch_campaigns_v1(config, status=status, channel=channel, limit=limit, page=page)
+
+
+# def _fetch_campaigns_v1(config, status=None, channel=None, limit=15, page=1):
+#     """Calls POST /core-services/v1/campaigns/search. Works with the standard
+#     API key from Settings > Account > APIs. Cannot return Draft campaigns."""
+#     dc = config["moengage"]["data_center"]
+#     workspace_id = config["moengage"]["workspace_id"]
+#     api_key = config["moengage"]["api_key"]
+
+#     url = f"https://api-{dc}.moengage.com/core-services/v1/campaigns/search"
+
+#     auth_string = base64.b64encode(f"{workspace_id}:{api_key}".encode()).decode()
+#     headers = {
+#         "Content-Type": "application/json",
+#         "MOE-APPKEY": workspace_id,
+#         "Authorization": f"Basic {auth_string}",
+#     }
+
+#     campaign_fields = {}
+#     if status:
+#         campaign_fields["status"] = [status]
+#     if channel:
+#         campaign_fields["channels"] = [channel]
+
+#     body = {
+#         "request_id": f"qa_agent_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+#         "campaign_fields": campaign_fields,
+#         "limit": limit,
+#         "page": page,
+#     }
+
+#     last_error = None
+#     for attempt in range(2):  # try once, then one retry on timeout
+#         try:
+#             resp = requests.post(url, headers=headers, json=body, timeout=30)
+#             if resp.status_code != 200:
+#                 print(f"MoEngage API error {resp.status_code}: {resp.text}", file=sys.stderr)
+#                 raise requests.exceptions.HTTPError(
+#                     f"{resp.status_code} error from MoEngage: {resp.text}", response=resp
+#                 )
+#             return resp.json()
+#         except requests.exceptions.Timeout as e:
+#             last_error = e
+#             continue  # retry once
+#     raise last_error
+
+
+# def _fetch_campaigns_v5(config, status=None, channel=None, limit=15, page=1):
+#     """Calls POST /v5/campaigns/search - the only way to retrieve Draft
+#     campaigns. Requires an API key generated from Settings > Account >
+#     API keys (an Early Access feature - contact MoEngage CSM/Support to
+#     enable it if that page isn't visible in your dashboard yet). Using a
+#     standard V1-style key here will fail with a 401."""
 #     dc = config["moengage"]["data_center"]
 #     workspace_id = config["moengage"]["workspace_id"]
 #     api_key = config["moengage"]["api_key"]
@@ -120,6 +180,16 @@
 #     for attempt in range(2):  # try once, then one retry on timeout
 #         try:
 #             resp = requests.post(url, headers=headers, json=body, timeout=30)
+#             if resp.status_code == 401:
+#                 raise requests.exceptions.HTTPError(
+#                     "401 from MoEngage V5 API: your API key doesn't have V5/Campaigns "
+#                     "permissions. Draft campaigns require a key generated from Settings > "
+#                     "Account > API keys (with the Campaigns: View / Create & Manage / "
+#                     "Create, Manage & Publish boxes checked) - this page is an Early Access "
+#                     "feature; ask your MoEngage CSM or Support team to enable it for your "
+#                     "account, then generate a key there and use it here.",
+#                     response=resp,
+#                 )
 #             if resp.status_code != 200:
 #                 print(f"MoEngage API error {resp.status_code}: {resp.text}", file=sys.stderr)
 #                 raise requests.exceptions.HTTPError(
@@ -142,12 +212,14 @@
 #     if not cfg["enabled"]:
 #         return []
 #     name = campaign.get("basic_details", {}).get("name", "")
-#     pattern = cfg["regex"]
 #     flags = re.IGNORECASE if cfg.get("regex_flags") == "IGNORECASE" else 0
-#     if not re.match(pattern, name, flags):
-#         example = cfg.get("example_push", cfg.get("example", ""))
-#         return [f"Name '{name}' doesn't match naming convention. Expected format like: {example}"]
-#     return []
+
+#     for pattern_cfg in cfg.get("patterns", []):
+#         if re.match(pattern_cfg["regex"], name, flags):
+#             return []  # matched at least one valid pattern - pass
+
+#     examples = "; OR ".join(f"{p['name']}: {p['example']}" for p in cfg.get("patterns", []))
+#     return [f"Name '{name}' doesn't match any known naming convention. Expected format like: {examples}"]
 
 
 # def check_utm_params(campaign, rules):
@@ -586,6 +658,8 @@
 
 # if __name__ == "__main__":
 #     main()
+
+
 
 
 #!/usr/bin/env python3
@@ -1087,13 +1161,17 @@ def check_content_completeness(campaign, rules):
                 f"({len(html_content)} chars, expected at least {cfg.get('min_total_content_length', 200)})."
             )
     else:
-        # Generic fallback for other channels (e.g. SMS) whose exact schema
-        # we haven't confirmed yet - checks there's a reasonable amount of text.
+        # Generic fallback for other channels (e.g. SMS, WhatsApp) whose exact
+        # schema we haven't confirmed yet - checks there's a reasonable amount
+        # of text, using a per-channel threshold since short-message channels
+        # shouldn't be held to Email's length bar.
         channel_key = channel.lower()
         node = content_root.get(channel_key) or content_root
         texts = _extract_content_strings(node)
         total_len = sum(len(t.strip()) for t in texts)
-        min_len = cfg.get("min_total_content_length", 200)
+        min_len = cfg.get("min_total_content_length_by_channel", {}).get(
+            channel, cfg.get("min_total_content_length", 200)
+        )
         if total_len < min_len:
             issues.append(
                 f"Content for {channel} looks unusually short or empty "
