@@ -5,9 +5,9 @@
     "patterns": [
       {
         "name": "Standard (CLM prefix)",
-        "regex": "^CLM_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_(push|emailer|sms)_([1-9]|[12][0-9]|3[01])/([1-9]|1[0-2])$",
-        "example": "CLM_P75OFF_Registered_NotPurchased_push_25/7",
-        "note": "Format: CLM_<creativename>_<cohortname>_<channel-token>_date/month. Channel-token is 'push' for Push and 'Emailer' for Email - separate from the API's 'channel' field which returns 'PUSH'/'EMAIL'."
+        "regex": "^CLM_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_(push|emailer|sms)_(0[1-9]|[12][0-9]|3[01]|[1-9])/([1-9]|1[0-2])$",
+        "example": "CLM_FullyLoadedDoubleRice_High_frequency_shoppers_push_08/9",
+        "note": "Format: CLM_<creativename>_<cohortname>_<channel-token>_date/month. Channel-token is 'push' for Push and 'Emailer' for Email - separate from the API's 'channel' field which returns 'PUSH'/'EMAIL'. Day accepts either a leading zero (08) or not (8)."
       },
       {
         "name": "ADH client (SMS/Email/WhatsApp)",
@@ -21,7 +21,7 @@
   "tags_check": {
     "enabled": true,
     "min_tags": 1,
-    "note": "Flags campaigns with no tags at all - tags are how you filter/report on campaigns later, so an untagged campaign is a QA gap."
+    "note": "Generic fallback: flags campaigns with no tags at all. Overridden per client+channel by client_channel_rules.<CLIENT>.<CHANNEL> when configured - either tags_must_match_name_segments (KFC PUSH: derives the expected cohort/creative names from the campaign name itself and checks each shows up as a tag, since MoEngage's tag categories aren't in the API response - only the flat tag text is) or the simpler required_tags_contains (literal keyword match)."
   },
   "segment_sanity": {
     "enabled": true,
@@ -38,7 +38,24 @@
       "SMS": 10,
       "WHATSAPP": 10
     },
-    "note": "For Push: checks title/message aren't empty per platform (android/ios/web). For Email/SMS/WhatsApp: generic check that there's a reasonable amount of extracted text content (catches an accidentally-empty template). Length threshold is per-channel since SMS/WhatsApp messages are naturally short - falls back to min_total_content_length if a channel isn't listed in min_total_content_length_by_channel."
+    "push": {
+      "max_title_length": 65,
+      "max_message_length": 178,
+      "expected_platforms": []
+    },
+    "email": {
+      "min_subject_length": 10,
+      "max_subject_length": 150,
+      "approved_from_domains": []
+    },
+    "sms": {
+      "single_segment_length": 160,
+      "concatenated_segment_length": 153
+    },
+    "whatsapp": {
+      "require_template_name": false
+    },
+    "note": "Channel-specific, meaningful checks rather than just presence/absence. PUSH: per-platform title/message length limits (device truncation), title==message duplicate detection, placeholder-copy detection, and (if you list them) which platforms (android/ios/web) must be present. EMAIL: subject length range, preview text not duplicating the subject, from/reply-to address format, from_address domain against approved_from_domains (leave empty to skip), placeholder-copy detection. SMS: real GSM segment-length math (160 single-segment / 153 per concatenated segment) so silent multi-segment sends get flagged, not just 'is there text'. WHATSAPP: placeholder-copy detection plus a best-effort template_name check (require_template_name) - the exact WhatsApp content payload shape wasn't available to confirm, so adjust _check_whatsapp_content in moengage_qa_agent.py if your field names differ. Any channel not listed above (or with expected_platforms/approved_from_domains left empty) falls back to length-only checks so nothing breaks before you tune these."
   },
   "control_group_check": {
     "enabled": true,
@@ -49,14 +66,285 @@
     "enabled": true,
     "require_at_least_one_goal": true,
     "require_exactly_one_primary_goal": true,
-    "note": "Flags campaigns with zero conversion goals, or with zero/multiple goals marked as primary."
+    "flag_extra_goals": false,
+    "standard_goals_by_client": {
+      "KFC": [
+        {
+          "goal_name": "Goal 1",
+          "goal_event_name": "purchase",
+          "must_be_primary": true,
+          "require_revenue_tracking": true
+        },
+        {
+          "goal_name": "Goal 2",
+          "goal_event_name": "registrationFinish",
+          "must_be_primary": false
+        },
+        {
+          "goal_name": "Goal 3",
+          "goal_event_name": "registration_complete",
+          "must_be_primary": false
+        }
+      ],
+      "HOAD_IND": [
+        {
+          "goal_name": "Goal 1",
+          "goal_event_name": "Order_Summary",
+          "must_be_primary": true,
+          "require_revenue_tracking": true,
+          "revenue_currency": "INR"
+        },
+        {
+          "goal_name": "Goal 2",
+          "goal_event_name": "LineItem_Purchase",
+          "must_be_primary": false
+        }
+      ],
+      "HOAD_USA": [
+        {
+          "goal_name": "Goal 1",
+          "goal_event_name": "Order_Summary",
+          "must_be_primary": true,
+          "require_revenue_tracking": true,
+          "revenue_currency": "USD"
+        },
+        {
+          "goal_name": "Goal 2",
+          "goal_event_name": "LineItem_Purchase",
+          "must_be_primary": false
+        }
+      ],
+      "HOAD_UAE": [
+        {
+          "goal_name": "Goal 1",
+          "goal_event_name": "Order_Summary",
+          "must_be_primary": true,
+          "require_revenue_tracking": true,
+          "revenue_currency": "AED"
+        },
+        {
+          "goal_name": "Goal 2",
+          "goal_event_name": "LineItem_Purchase",
+          "must_be_primary": false
+        }
+      ],
+      "ANDGD_IND": [
+        {
+          "goal_name": "Goal 1",
+          "goal_event_name": "Order_Summary",
+          "must_be_primary": true,
+          "require_revenue_tracking": true,
+          "revenue_currency": "INR"
+        },
+        {
+          "goal_name": "Goal 2",
+          "goal_event_name": "LineItem_Purchase",
+          "must_be_primary": false
+        }
+      ]
+    },
+    "note": "standard_goals_by_client is keyed by client key, matching clients_config.json. KFC: 3 standard goals ('purchase' primary/revenue, 'registrationFinish' + 'registration_complete' secondary). HOAD_IND/HOAD_USA/HOAD_UAE/ANDGD_IND: 2 standard goals ('Order_Summary' primary/revenue, 'LineItem_Purchase' secondary) - identical structure across all 4 HOAD/ANDGD dashboards, only revenue_currency differs (INR/USD/AED) per the confirmed currency-per-dashboard mapping. WESTSIDE has no entry yet, so campaigns for that client fall back to the plain presence-only checks (require_at_least_one_goal / require_exactly_one_primary_goal) below - add a WESTSIDE array here (same shape) once its standard goals are defined. Set flag_extra_goals to true to also flag any goal beyond the standard list, for a client that has one configured."
   },
   "delivery_controls_check": {
     "enabled": true,
     "flag_if_ignore_frequency_capping": true,
     "flag_if_throttle_rpm_zero": true,
     "flag_if_bypass_dnd": false,
-    "note": "bypass_dnd flagging is OFF - it's intentional/standard on this team's Fixed-timing campaigns. Set flag_if_bypass_dnd to true if you ever want it back (e.g. to catch it being on for a non-time-critical campaign by mistake)."
+    "note": "bypass_dnd flagging is OFF - it's intentional/standard on this team's Fixed-timing campaigns. Set flag_if_bypass_dnd to true if you ever want it back (e.g. to catch it being on for a non-time-critical campaign by mistake). Generic fallback only - overridden per client+channel by client_channel_rules.<CLIENT>.<CHANNEL>.delivery_controls when configured (e.g. KFC PUSH requires an exact campaign_throttle_rpm of 100000, not just 'non-zero')."
+  },
+  "client_channel_rules": {
+    "KFC": {
+      "PUSH": {
+        "tags_must_match_name_segments": true,
+        "exclude_filters": {
+          "required": true,
+          "filter_operator_required": "or",
+          "must_exclude_country": "Israel",
+          "must_exclude_reachability_android_codes": [202, 300, 403, 404, 409],
+          "must_exclude_reachability_ios_codes": [202, 300, 403, 404, 409]
+        },
+        "control_group": {
+          "global_required": true
+        },
+        "delivery_controls": {
+          "campaign_throttle_rpm_required": 100000,
+          "ignore_frequency_capping_must_be": false
+        },
+        "conversion_goal_attribution_hours_required": 24,
+        "content": {
+          "push": {
+            "expected_platforms": ["android", "ios", "web"],
+            "require_default_click_action": true
+          }
+        },
+        "platforms": {
+          "required": ["ANDROID", "IOS", "WEB"]
+        },
+        "android_settings": {
+          "huawei_mobile_services_delivery_required": true
+        },
+        "ios_provisional_push": {
+          "send_to_all_eligible_device_required": true,
+          "exclude_provisional_push_devices_required": true,
+          "send_to_only_provisional_push_enabled_devices_required": false
+        },
+        "advanced": {
+          "expire_notification_after_value_required": 36,
+          "expire_notification_after_type_required": "HOUR",
+          "remove_from_inbox_after_value_required": 30,
+          "remove_from_inbox_after_type_required": "DAY",
+          "android_send_with_priority_required": false,
+          "apns_priority_required": 10,
+          "interruption_level_required": "ACTIVE",
+          "relevance_score_required": 0.5
+        },
+        "pending_verification": {
+          "note": "Only these 3 remain unconfirmed - they simply don't appear anywhere in a real KFC PUSH campaign JSON that has them in their default/off state (Precompute audience, Campaign audience limit, and Background update targeting were all off/unchecked in the screenshots), so it's not yet known what key(s) MoEngage adds when they're turned ON. If a campaign that has any of these enabled ever gets flagged as a false pass, dump that campaign's raw JSON (python3 moengage_qa_agent.py --dump-raw) and share it to wire these in.",
+          "precompute_audience_required": true,
+          "campaign_audience_limit_required": false,
+          "background_update_targeting_send_to_opted_out_required": false
+        }
+      },
+      "EMAIL": {
+        "tags_must_match_name_segments": true,
+        "exclude_filters": {
+          "required": true,
+          "filter_operator_required": "or",
+          "must_exclude_country": "Israel",
+          "must_exclude_custom_segment": "CLM_HardBounce_11/11/24",
+          "must_exclude_unsubscribed": true
+        },
+        "control_group": {
+          "global_required": true
+        },
+        "delivery_controls": {
+          "campaign_throttle_rpm_required": 60000,
+          "ignore_frequency_capping_must_be": false,
+          "bypass_dnd_must_be": false
+        },
+        "conversion_goal_attribution_hours_required": 5,
+        "connector": {
+          "type_required": "SENDGRID"
+        },
+        "content": {
+          "email": {
+            "approved_from_domains": ["marketing.kfc.com.ph"],
+            "sender_name_required": "KFC Philippines",
+            "reply_to_must_equal_from": true
+          }
+        }
+      }
+    },
+    "HOAD_IND": {
+      "EMAIL": {
+        "tags_must_match_named_segments": {
+          "name_regex": "^(ADH)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)_OMNI_(SMS|EMAIL|WA)_WK([0-9]{1,2})_([0-9]{8})$",
+          "tag_segments": [
+            {"group": 1, "label": "campaign type", "value_map": {"ADH": "Adhoc"}},
+            {"group": 3, "label": "creative"},
+            {"group": 5, "label": "channel"},
+            {"group": 6, "label": "week", "template": "WK{}"}
+          ]
+        },
+        "exclude_filters": {
+          "required": true,
+          "must_have_custom_segment_exclusion": true
+        },
+        "control_group": {
+          "global_required": false
+        },
+        "delivery_controls": {
+          "campaign_throttle_rpm_required": 1000
+        },
+        "connector": {
+          "required": true
+        },
+        "conversion_goal_attribution_hours_required": 7
+      }
+    },
+    "HOAD_USA": {
+      "EMAIL": {
+        "tags_must_match_named_segments": {
+          "name_regex": "^(ADH)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)_OMNI_(SMS|EMAIL|WA)_WK([0-9]{1,2})_([0-9]{8})$",
+          "tag_segments": [
+            {"group": 1, "label": "campaign type", "value_map": {"ADH": "Adhoc"}},
+            {"group": 3, "label": "creative"},
+            {"group": 5, "label": "channel"},
+            {"group": 6, "label": "week", "template": "WK{}"}
+          ]
+        },
+        "exclude_filters": {
+          "required": true,
+          "must_have_custom_segment_exclusion": true
+        },
+        "control_group": {
+          "global_required": false
+        },
+        "delivery_controls": {
+          "campaign_throttle_rpm_required": 1000
+        },
+        "connector": {
+          "required": true
+        },
+        "conversion_goal_attribution_hours_required": 7
+      }
+    },
+    "HOAD_UAE": {
+      "EMAIL": {
+        "tags_must_match_named_segments": {
+          "name_regex": "^(ADH)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)_OMNI_(SMS|EMAIL|WA)_WK([0-9]{1,2})_([0-9]{8})$",
+          "tag_segments": [
+            {"group": 1, "label": "campaign type", "value_map": {"ADH": "Adhoc"}},
+            {"group": 3, "label": "creative"},
+            {"group": 5, "label": "channel"},
+            {"group": 6, "label": "week", "template": "WK{}"}
+          ]
+        },
+        "exclude_filters": {
+          "required": true,
+          "must_have_custom_segment_exclusion": true
+        },
+        "control_group": {
+          "global_required": false
+        },
+        "delivery_controls": {
+          "campaign_throttle_rpm_required": 1000
+        },
+        "connector": {
+          "required": true
+        },
+        "conversion_goal_attribution_hours_required": 7
+      }
+    },
+    "ANDGD_IND": {
+      "EMAIL": {
+        "tags_must_match_named_segments": {
+          "name_regex": "^(ADH)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)_OMNI_(SMS|EMAIL|WA)_WK([0-9]{1,2})_([0-9]{8})$",
+          "tag_segments": [
+            {"group": 1, "label": "campaign type", "value_map": {"ADH": "Adhoc"}},
+            {"group": 2, "label": "brand"},
+            {"group": 3, "label": "creative"},
+            {"group": 5, "label": "channel"},
+            {"group": 6, "label": "week", "template": "WK{}"}
+          ]
+        },
+        "exclude_filters": {
+          "required": true,
+          "must_have_custom_segment_exclusion": true
+        },
+        "control_group": {
+          "global_required": true
+        },
+        "delivery_controls": {
+          "campaign_throttle_rpm_required": 1000
+        },
+        "connector": {
+          "required": true
+        },
+        "conversion_goal_attribution_hours_required": 7
+      }
+    },
+    "note": "Per-client, per-channel overrides/additions on top of the generic checks above - keyed by client key (matching the Client Name dropdown) then channel (matching the API's channel value, e.g. PUSH/EMAIL/SMS/WHATSAPP). KFC/PUSH, KFC/EMAIL, and HOAD_IND|HOAD_USA|HOAD_UAE|ANDGD_IND EMAIL are filled in so far; add more client/channel blocks the same way as they're defined. See check_client_channel_rules in moengage_qa_agent.py for how each key is used. Note content.email is intentionally NOT set for the HOAD/ANDGD dashboards (unlike KFC) - per instructions, sender domain/reply-to/etc only need to be checked for presence there, which the generic content_check.email defaults already do. Confirmed: conversion_goal_attribution_hours_required is 7 for ALL channels of HOAD_IND/HOAD_USA/HOAD_UAE/ANDGD_IND (not just EMAIL) - carry this same value=7 into their WA/SMS/RCS blocks when those are added."
   },
   "utm_required": {
     "enabled": false,

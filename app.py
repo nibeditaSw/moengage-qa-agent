@@ -284,28 +284,29 @@ st.set_page_config(page_title="MoEngage Campaign QA", page_icon="✅", layout="w
 
 
 # ---------------------------------------------------------------------------
-# Config loading — pulls from Streamlit secrets first (for deployed use),
-# falls back to environment variables (for local runs), and always loads
-# QA rules fresh from qa_rules.json so edits to that file take effect
-# immediately without redeploying.
+# Config loading — no secrets.toml / st.secrets involved anywhere. QA rules
+# (qa_rules.json) are still loaded fresh from disk so edits take effect
+# immediately without redeploying. MoEngage account details (Workspace ID,
+# API Key, Data Center) and the Client are entered directly in the app on
+# every run (Step 1 below) - nothing is read from or written to a secrets
+# file, and nothing is saved anywhere between sessions.
 # ---------------------------------------------------------------------------
 
 def get_credential(key, default=""):
-    if key in st.secrets:
-        return st.secrets[key]
+    """Env-var only (no st.secrets) - avoids StreamlitSecretNotFoundError
+    when no .streamlit/secrets.toml exists, which is expected now that
+    MoEngage credentials are entered directly in the app instead."""
     return os.getenv(key, default)
 
 
 def load_rules():
     with open("qa_rules.json", "r") as f:
         rules = json.load(f)
-    rules["moengage"] = {
-        "workspace_id": get_credential("MOENGAGE_WORKSPACE_ID"),
-        "api_key": get_credential("MOENGAGE_API_KEY"),
-        "data_center": get_credential("MOENGAGE_DATA_CENTER", "01"),
-    }
     rules["slack_webhook_url"] = get_credential("SLACK_WEBHOOK_URL", "")
     return rules
+
+
+CLIENT_OPTIONS = ["KFC", "HOAD_IND", "HOAD_USA", "HOAD_UAE", "ANDGD_IND", "WESTSIDE"]
 
 
 # ---------------------------------------------------------------------------
@@ -384,45 +385,62 @@ def build_excel_report(results):
 st.caption("Run pre-launch QA checks on your MoEngage campaigns — no terminal, no setup.")
 
 # ---------------------------------------------------------------------------
-# Sidebar: optional per-session credential override, so anyone can point
-# this at a different MoEngage account without touching Streamlit secrets
-# or redeploying. Left blank = falls back to the deployed default account.
-# Nothing entered here is saved anywhere - it only lives for this browser
-# session and is cleared on refresh.
+# Step 1: MoEngage account details, entered directly in the app - no
+# secrets.toml, no environment file, nothing read from or saved to disk.
+# Values only live in this browser session and are gone on refresh.
 # ---------------------------------------------------------------------------
 
-with st.sidebar:
-    st.header("MoEngage account")
-    st.caption("Leave blank to use the default account configured for this app.")
-    override_workspace_id = st.text_input("Workspace ID", value="", key="override_workspace_id")
-    override_api_key = st.text_input("API Key", value="", type="password", key="override_api_key")
-    override_data_center = st.text_input(
-        "Data Center (e.g. 01)", value="", placeholder="01", key="override_data_center"
+st.subheader("Step 1: MoEngage account details")
+col_ws, col_key, col_dc, col_client = st.columns(4)
+with col_ws:
+    workspace_id = st.text_input("Workspace ID", value="", key="workspace_id_input")
+with col_key:
+    api_key = st.text_input("API Key", value="", type="password", key="api_key_input")
+with col_dc:
+    data_center = st.text_input("Data Center (e.g. 01)", value="", placeholder="01", key="data_center_input")
+with col_client:
+    client_key = st.selectbox(
+        "Client Name",
+        CLIENT_OPTIONS,
+        index=None,
+        placeholder="Choose a client...",
+        key="client_key",
     )
-    st.caption("These values are only used for your current session and are never saved.")
 
-rules = load_rules()
-
-if override_workspace_id.strip():
-    rules["moengage"]["workspace_id"] = override_workspace_id.strip()
-if override_api_key.strip():
-    rules["moengage"]["api_key"] = override_api_key.strip()
-if override_data_center.strip():
-    rules["moengage"]["data_center"] = override_data_center.strip()
-
-using_override = bool(override_workspace_id.strip() or override_api_key.strip())
-if using_override:
-    st.info("Using the MoEngage account entered in the sidebar for this session.", icon="🔑")
-
-if not rules["moengage"]["workspace_id"] or not rules["moengage"]["api_key"]:
-    st.error(
-        "No MoEngage credentials available. Either enter them in the sidebar, or whoever "
-        "deployed this app needs to add MOENGAGE_WORKSPACE_ID, MOENGAGE_API_KEY, and "
-        "MOENGAGE_DATA_CENTER in Streamlit secrets (see README.md)."
-    )
+if not workspace_id.strip() or not api_key.strip():
+    st.info("Enter your Workspace ID and API Key above to continue.")
+    st.stop()
+if not client_key:
+    st.info("Choose a client above to continue.")
     st.stop()
 
-col1, col2, col3 = st.columns(3)
+rules = load_rules()
+rules["client_key"] = client_key
+rules["moengage"] = {
+    "workspace_id": workspace_id.strip(),
+    "api_key": api_key.strip(),
+    "data_center": data_center.strip() or "01",
+}
+st.caption(f"Using the account entered above for **{client_key}**.")
+
+st.subheader("Step 2: Select channel to QA")
+channel = st.selectbox(
+    "Channel",
+    ["All", "PUSH", "EMAIL", "INAPP", "OSM", "SMS", "WHATSAPP"],
+    index=0,
+    key="channel_select",
+    help=(
+        "QA checks are applied based on this client + channel combination - each channel "
+        "gets its own set of specific, meaningful checks (not just present/not-present). "
+        "WHATSAPP confirmed supported by MoEngage support for the V5 Search Campaigns API. "
+        "It's newly added and not yet content-checked in as much detail as Email/Push - "
+        "if a WhatsApp check looks wrong, share the output and it'll get tightened up the "
+        "same way Email was."
+    ),
+)
+
+st.subheader("Step 3: Filter & run")
+col1, col2 = st.columns(2)
 with col1:
     status = st.selectbox(
         "Campaign status",
@@ -440,18 +458,6 @@ with col1:
         ),
     )
 with col2:
-    channel = st.selectbox(
-        "Channel",
-        ["All", "PUSH", "EMAIL", "SMS", "WHATSAPP"],
-        index=0,
-        help=(
-            "WHATSAPP confirmed supported by MoEngage support for the V5 Search Campaigns API. "
-            "It's newly added and not yet content-checked in as much detail as Email/Push - "
-            "if a WhatsApp check looks wrong, share the output and it'll get tightened up the "
-            "same way Email was."
-        ),
-    )
-with col3:
     limit = st.number_input("Max campaigns to check", min_value=1, max_value=15, value=15)
 
 run_clicked = st.button("▶ Run QA Check", type="primary", use_container_width=True)
@@ -475,6 +481,7 @@ if run_clicked:
                     "channel": campaign.get("channel"),
                     "status": campaign.get("status"),
                     "issues": issues,
+                    "limited_check": bool(campaign.get("_meta_only")),
                 }
             )
 
@@ -494,6 +501,12 @@ if run_clicked:
         for r in results:
             icon = "🚨" if r["issues"] else "✅"
             with st.expander(f"{icon} {r['name']}  ·  {r['channel']}  ·  {r['campaign_id']}", expanded=bool(r["issues"])):
+                if r["limited_check"]:
+                    st.caption(
+                        "ℹ️ Limited data available for this channel via the API - only Naming "
+                        "Convention and Tags were checked (content, targeting, control group, "
+                        "delivery controls, conversion goals, and connector could not be checked)."
+                    )
                 if r["issues"]:
                     for issue in r["issues"]:
                         st.markdown(f"- {issue}")
