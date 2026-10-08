@@ -787,19 +787,35 @@ def load_config(client=None):
 # MoEngage API
 # ---------------------------------------------------------------------------
 
-META_ONLY_CHANNELS = {"WHATSAPP"}
-# Channels that /core-services/v1/campaigns/search rejects outright (confirmed
+META_ONLY_CHANNELS = set()
+# Was {"WHATSAPP", "SMS"}. Per MoEngage Support (ticket reply, confirmed with
+# docs link https://www.moengage.com/docs/api/get-campaign-details/search-campaigns):
+# SMS *is* supported by /core-services/v1/campaigns/search like PUSH/EMAIL -
+# our original "SMS behaves the same as WHATSAPP" assumption was wrong, so SMS
+# now goes through the normal full-detail V1 Search path below, same as
+# PUSH/EMAIL. WHATSAPP is handled separately - see V5_PREFERRED_CHANNELS.
+
+V5_PREFERRED_CHANNELS = {"WHATSAPP"}
+# /core-services/v1/campaigns/search rejects WHATSAPP outright (confirmed
 # empirically: passing channels=["WHATSAPP"] there returns a 400 "channels is
-# invalid passed value" error). For these, fall back to the lightweight
-# /campaigns/meta (V1 legacy) endpoint instead - it supports WHATSAPP (also
-# FACEBOOK/GOOGLE ADS/CONNECTORS, not used by this tool) but only returns
-# campaign_id/channel/platform/created_by/delivery_type/name/team/tags/status/
-# start_time(/reachability_details for scheduled campaigns) - none of the
-# content/targeting/control-group/delivery-controls/conversion-goal/connector
-# detail the full Search endpoint gives. Campaigns fetched this way are
-# reshaped to the same basic_details.{name,tags} shape used everywhere else,
-# flagged with _meta_only=True, and run_qa() runs only the checks that don't
-# need the missing detail (naming convention + tags) for them.
+# invalid passed value" error). Per MoEngage Support, /v5/campaigns/search
+# DOES support it with full detail. V5 needs a different, Early-Access API
+# key (see _fetch_campaigns_v5's docstring) that may not be provisioned yet,
+# so fetch_campaigns() tries V5 first for these channels and automatically
+# falls back to the lightweight /campaigns/meta endpoint (naming + tags only
+# - see _fetch_campaigns_meta) if V5 isn't available for this account yet.
+# Once V5 access is granted, WhatsApp automatically starts getting full
+# checks with no config change needed here.
+
+UNAVAILABLE_CHANNELS = {"RCS", "INAPP", "OSM", "ON_SITE_MESSAGING"}
+# Channels with no *campaign-level* API access at all right now, per
+# MoEngage Support directly: RCS has no API of any kind yet (Support
+# suggested filing a feature request). In-App and On-Site Messaging have
+# template-level APIs (/custom-templates/inapp, /custom-templates/osm) for
+# managing creative content, but nothing for campaign-level
+# targeting/scheduling/control-group/etc., so there's no campaign to QA via
+# API for these yet. Listed here so fetch_campaigns can fail with a clear
+# explanation instead of a confusing raw API error.
 
 
 def fetch_campaigns(config, status=None, channel=None, limit=15, page=1):
@@ -807,25 +823,51 @@ def fetch_campaigns(config, status=None, channel=None, limit=15, page=1):
     on what's being requested.
 
     V1 Search is used by default because it works with the standard API key
-    every MoEngage account has (Settings > Account > APIs). V1 Search cannot
-    return Draft campaigns, and cannot return WHATSAPP (or FACEBOOK/GOOGLE
-    ADS/CONNECTORS) campaigns at all - see META_ONLY_CHANNELS.
+    every MoEngage account has (Settings > Account > APIs), and gives full
+    campaign detail. It cannot return Draft campaigns, and cannot return
+    WHATSAPP (or FACEBOOK/GOOGLE ADS/CONNECTORS) campaigns at all - see
+    V5_PREFERRED_CHANNELS.
 
-    V5 Search is only used when status is exactly "DRAFT", since that's the
-    only thing V1 Search can't do. V5 requires a *different* kind of API key
-    - one generated from Settings > Account > API keys, a page that is an
-    Early Access feature MoEngage enables per-account on request (contact
-    your MoEngage CSM or Support team to turn it on). If that key isn't set
-    up yet, V5 calls fail with a 401 - see _fetch_campaigns_v5 for the
-    specific error message this raises in that case.
+    V5 Search is used for Draft campaigns (status == "DRAFT") and for
+    V5_PREFERRED_CHANNELS, since V1 Search can't do either. V5 requires a
+    *different* kind of API key - one generated from Settings > Account >
+    API keys, a page that is an Early Access feature MoEngage enables
+    per-account on request (contact your MoEngage CSM or Support team to
+    turn it on). If that key isn't set up yet, V5 calls fail with a 401 -
+    see _fetch_campaigns_v5 for the specific error message this raises in
+    that case. For a V5_PREFERRED_CHANNELS channel specifically (not for
+    Draft status), that 401 is caught here and this falls back to V1 Meta
+    automatically rather than failing outright.
 
-    V1 Meta is used when channel is one of META_ONLY_CHANNELS.
+    V1 Meta is the fallback for V5_PREFERRED_CHANNELS channels when V5 isn't
+    available for this account.
 
     All three return the same shape: a plain list of campaign dicts (Meta's
     are reshaped to match; see _fetch_campaigns_meta).
     """
-    if channel in META_ONLY_CHANNELS:
-        return _fetch_campaigns_meta(config, status=status, channel=channel, limit=limit, page=page)
+    if channel and channel.upper() in UNAVAILABLE_CHANNELS:
+        # Deliberately a normal exception, not sys.exit(): sys.exit() raises
+        # SystemExit, which is NOT a subclass of Exception, so app.py's
+        # `except Exception` around this call wouldn't catch it and the
+        # whole Streamlit app would crash instead of showing a clean error.
+        raise RuntimeError(
+            f"'{channel}' campaigns have no campaign-level API access right now (per "
+            "MoEngage Support) - this is a current MoEngage platform limitation, not a "
+            "bug in this tool. In-App/On-Site Messaging do have template-level APIs "
+            "(/custom-templates/inapp, /custom-templates/osm) for managing creative "
+            "content, but not campaign targeting/scheduling/etc., so this tool doesn't "
+            "use them yet. RCS has no API at all - MoEngage Support suggested filing a "
+            "feature request. Only PUSH/EMAIL/SMS (full detail) and WHATSAPP (full "
+            "detail if V5 API access is set up, otherwise naming + tags only) can be "
+            "checked today."
+        )
+    if channel in V5_PREFERRED_CHANNELS and status != "DRAFT":
+        try:
+            return _fetch_campaigns_v5(config, status=status, channel=channel, limit=limit, page=page)
+        except requests.exceptions.HTTPError as e:
+            if getattr(e.response, "status_code", None) == 401:
+                return _fetch_campaigns_meta(config, status=status, channel=channel, limit=limit, page=page)
+            raise
     if status == "DRAFT":
         return _fetch_campaigns_v5(config, status=status, channel=channel, limit=limit, page=page)
     return _fetch_campaigns_v1(config, status=status, channel=channel, limit=limit, page=page)
@@ -1338,6 +1380,7 @@ def check_tags(campaign, rules):
             return []  # unparseable name - check_naming_convention already flags this
         normalized_tags = [_normalize_tag_text(t) for t in tags]
         issues = []
+        matched_tag_indexes = set()
         for seg in named_cfg.get("tag_segments", []):
             group_text = m.group(seg["group"])
             if group_text is None:
@@ -1352,11 +1395,30 @@ def check_tags(campaign, rules):
             else:
                 expected = group_text
             norm_expected = _normalize_tag_text(expected)
-            if not any(_texts_fuzzy_match(norm_expected, nt) for nt in normalized_tags if nt):
+            match_idx = next(
+                (i for i, nt in enumerate(normalized_tags) if nt and _texts_fuzzy_match(norm_expected, nt)),
+                None,
+            )
+            if match_idx is None:
                 label = seg.get("label", f"segment {seg['group']}")
                 issues.append(
                     f"No tag found matching the {label} ('{expected}') from the campaign name "
                     f"(found tags: {tags or 'none'})."
+                )
+            else:
+                matched_tag_indexes.add(match_idx)
+
+        if named_cfg.get("require_extra_unmatched_tag"):
+            # For categories with no name-derivable expected value (e.g.
+            # Cohort, where the tag text doesn't resemble the name's cohort
+            # segment at all - see HOAD/ANDGD naming notes), the best this
+            # tool can check without a false-positive risk is presence: is
+            # there at least one tag beyond the ones already matched above?
+            unmatched_count = len(tags) - len(matched_tag_indexes)
+            if unmatched_count < 1:
+                issues.append(
+                    "No additional tag found beyond campaign type/brand/creative/channel/week "
+                    f"(found tags: {tags or 'none'}) - expected at least one more tag (e.g. for cohort)."
                 )
         return issues
 
@@ -1544,11 +1606,22 @@ def _check_email_content(campaign, cfg, ccr=None):
     return issues
 
 
+_TEMPLATE_SYNTAX_RE = re.compile(r"\{%.*?%\}|\{\{.*?\}\}", re.DOTALL)
+
+
 def _check_sms_content(campaign, cfg, ccr=None):
     """SMS: goes beyond "is there some text" to check actual SMS segment
     math (GSM-7 single-segment is 160 chars, each additional concatenated
     segment is 153 chars - going one char over silently costs a second
-    segment, i.e. doubles the send cost) and flags placeholder copy."""
+    segment, i.e. doubles the send cost) and flags placeholder copy.
+
+    Skips the segment-length math specifically when the message uses
+    MoEngage's Jinja-style personalization ({% if %}...{% endif %},
+    {{ variable }}): the *stored* message concatenates every branch's text
+    (e.g. one branch per store-lookup outcome), which can run to 10+x the
+    length of whatever single branch actually renders and sends - so
+    comparing the raw stored length against the 160-char limit would be
+    comparing the wrong number entirely, not a real finding."""
     content_root = (campaign.get("campaign_content", {}) or {}).get("content", {}) or {}
     node = content_root.get("sms") or content_root
     texts = _extract_content_strings(node)
@@ -1566,7 +1639,8 @@ def _check_sms_content(campaign, cfg, ccr=None):
     if _looks_like_placeholder(combined):
         issues.append("SMS content looks like placeholder/test copy, not final content.")
 
-    if len(combined) > single_segment_len:
+    has_template_syntax = bool(_TEMPLATE_SYNTAX_RE.search(combined))
+    if len(combined) > single_segment_len and not has_template_syntax:
         segments = 1 + -(-(len(combined) - single_segment_len) // concat_segment_len)  # ceil division
         issues.append(
             f"SMS message is {len(combined)} chars, over the {single_segment_len}-char single-segment "
@@ -1915,17 +1989,30 @@ def check_client_channel_rules(campaign, rules):
                 )
 
     connector_cfg = ccr.get("connector")
-    if connector_cfg and connector_cfg.get("type_required"):
-        actual_type = (campaign.get("connector", {}) or {}).get("connector_type")
-        if actual_type != connector_cfg["type_required"]:
-            issues.append(
-                f"Connector is '{actual_type}', expected '{connector_cfg['type_required']}' per "
-                "this client/channel's standard setup."
-            )
-    elif connector_cfg and connector_cfg.get("required") and not (campaign.get("connector", {}) or {}).get(
-        "connector_type"
-    ):
-        issues.append("No connector configured for this campaign - expected one to be set up.")
+    if connector_cfg:
+        # Connector shape differs by channel: Email returns a dict
+        # ({"connector_type": "SENDGRID", "connector_name": "..."}); SMS
+        # returns a plain string (the connector's name, e.g.
+        # "Dove_Soft_GLDESI_Promo"). Handle both rather than assuming dict.
+        raw_connector = campaign.get("connector")
+        if isinstance(raw_connector, dict):
+            connector_value = raw_connector.get("connector_type")
+            connector_present = bool(raw_connector)
+        elif isinstance(raw_connector, str):
+            connector_value = raw_connector
+            connector_present = bool(raw_connector.strip())
+        else:
+            connector_value = None
+            connector_present = False
+
+        if connector_cfg.get("type_required"):
+            if connector_value != connector_cfg["type_required"]:
+                issues.append(
+                    f"Connector is '{connector_value}', expected '{connector_cfg['type_required']}' per "
+                    "this client/channel's standard setup."
+                )
+        elif connector_cfg.get("required") and not connector_present:
+            issues.append("No connector configured for this campaign - expected one to be set up.")
 
     cg_cfg = ccr.get("control_group")
     if cg_cfg and "global_required" in cg_cfg:
@@ -2160,9 +2247,12 @@ def main():
     args = parser.parse_args()
 
     config = load_config(client=args.client)
-    campaigns = fetch_campaigns(
-        config, status=args.status, channel=args.channel, limit=args.limit, page=args.page
-    )
+    try:
+        campaigns = fetch_campaigns(
+            config, status=args.status, channel=args.channel, limit=args.limit, page=args.page
+        )
+    except RuntimeError as e:
+        sys.exit(str(e))
 
     if args.dump_raw:
         if not campaigns:

@@ -245,28 +245,81 @@ HOAD_IND EMAIL campaign export:
   same-letters-any-order, since real tags don't always keep the same word order as the
   name (e.g. name segment `TRUNKSHOWBellevue` vs tag `Bellevue Trunk show`).
 
-#### Channel availability outside PUSH/EMAIL (In-App, On-Site Messaging, WhatsApp)
+#### ANDGD_IND / SMS
 
-Two real API limitations were hit and worked around while building this out - worth
-knowing before adding more channels for any client:
+Same 8-tag taxonomy as the naming convention (Adhoc, Brand, Creative, Cohort, Channel,
+Week, Date, Static/Dynamic) but with one twist: the naming convention here adds an
+optional `_Static`/`_Dynamic` suffix
+(`ADH_GD_FESTIVEREFRESH_DORMANT_2TS_OMNI_SMS_WK26_25092026_Static`) that HOAD's Email
+names don't have - `naming_convention`'s "ADH client" pattern now accepts that suffix as
+optional (and tolerates one or more underscores before it, since a real campaign had a
+stray double underscore there).
 
-- **In-App and On-Site Messaging (OSM) aren't available via any documented MoEngage
-  campaigns API at all** (checked both `/campaigns/search` and the lighter
-  `/campaigns/meta`) - not a bug in this tool, a current platform limitation. KFC's
-  In-App/OSM QA is on hold until MoEngage exposes them.
-- **WhatsApp isn't available via `/campaigns/search`** (confirmed by a real `400 Bad
-  Request: channels is invalid passed value ['WHATSAPP']` error) **but is available via
-  `/campaigns/meta`** - a separate, lighter endpoint that only returns campaign_id,
-  channel, status, name, tags, platform, team, and (for scheduled campaigns) a
-  reachability count. No content, targeting, control group, delivery controls,
-  conversion goals, or connector data. `fetch_campaigns` (see `META_ONLY_CHANNELS` in
-  `moengage_qa_agent.py`) automatically routes WhatsApp (and any other channel added to
-  that set later) through `/campaigns/meta` instead, and tags the resulting campaign dict
-  with `_meta_only: true`. `run_qa` checks this flag and runs only `LIGHTWEIGHT_CHECKS`
-  (naming convention + tags) for such campaigns instead of the full `CHECKS` list - running
-  the full list would report false "missing X" issues for every field that endpoint simply
-  doesn't return. The Streamlit app shows a note on any campaign checked this way so it's
-  clear the result is partial, not a clean pass.
+- **Tags**: campaign type/brand/creative/channel/week are matched the same way as Email.
+  **Cohort is different**: its tag (e.g. `Dormant_B4_365day_2+timeshopper`) doesn't
+  resemble the name's cohort segment (`DORMANT_2TS`) at all - no reliable way to derive
+  or fuzzy-match an expected value from the name. Per instruction, this is checked as
+  presence only: `require_extra_unmatched_tag` just confirms at least one tag exists
+  beyond the ones already matched to campaign type/brand/creative/channel/week, without
+  trying to validate what it says. Two other tag categories named in the campaign's
+  taxonomy (Retargeting, Store Status) aren't part of the naming convention at all, so
+  they're intentionally not checked yet - nothing in the name to derive or fuzzy-match
+  them against either.
+- **Control group**: global must be **on** (same as ANDGD_IND Email, opposite of the 3
+  HOAD dashboards).
+- **Delivery controls**: request limit (`campaign_throttle_rpm`) must be exactly 10000 -
+  different from Email's 1000.
+- **Connector**: presence only, same as Email - but note SMS's `connector` field in the
+  API is a **plain string** (e.g. `"Dove_Soft_GLDESI_Promo"`), not a dict like Email's
+  `{"connector_type": "SENDGRID", ...}`. The connector check in
+  `check_client_channel_rules` now handles both shapes.
+- **SMS content check bugfix**: the generic SMS segment-length check
+  (`_check_sms_content`) was flagging real campaigns as "14 concatenated segments"
+  because MoEngage's Jinja-style personalization (`{% if %}...{% endif %}`,
+  `{{ variable }}`) stores *every* branch's text concatenated together (e.g. one branch
+  per store-lookup outcome) - only one branch actually renders and sends, so the raw
+  stored length (2000+ chars) was never the real delivered length. The segment-length
+  check now skips itself when it detects `{% %}`/`{{ }}` syntax in the message, since
+  there's no reliable way to compute the true rendered length from the stored template.
+  This applies to any client's SMS content, not just ANDGD_IND.
+
+#### Channel availability outside PUSH/EMAIL (SMS, WhatsApp, In-App, On-Site Messaging, RCS)
+
+Worked out by testing directly and confirmed with MoEngage Support (ticket reply, Oct
+2026) - worth knowing before adding more channels for any client:
+
+- **SMS gets full detail**, the same as PUSH/EMAIL, via `/core-services/v1/campaigns/search`
+  - confirmed by MoEngage Support (our original assumption that it behaved like WhatsApp
+  was wrong).
+- **WhatsApp**: `/core-services/v1/campaigns/search` rejects it outright (confirmed by a
+  real `400 Bad Request: channels is invalid passed value ['WHATSAPP']` error), but
+  `/v5/campaigns/search` supports it with full detail, per MoEngage Support. V5 needs a
+  separate, Early-Access API key (`Settings > Account > API keys` - ask MoEngage
+  CSM/Support to enable that page if it's not visible) that may not be provisioned for
+  every account. `fetch_campaigns` (see `V5_PREFERRED_CHANNELS` in
+  `moengage_qa_agent.py`) tries V5 first for WhatsApp; if that 401s (V5 not set up), it
+  automatically falls back to the lightweight `/campaigns/meta` endpoint instead of
+  failing outright - so WhatsApp always returns *something*, and automatically upgrades
+  to full detail the moment V5 access is granted, no code change needed.
+- **`/campaigns/meta`** (the fallback above) only returns campaign_id, channel, status,
+  name, tags, platform, team, and (for scheduled campaigns) a reachability count - no
+  content, targeting, control group, delivery controls, conversion goals, or connector
+  data. Campaigns fetched this way are tagged `_meta_only: true`, and `run_qa` runs only
+  `LIGHTWEIGHT_CHECKS` (naming convention + tags) for them instead of the full `CHECKS`
+  list - running the full list would report false "missing X" issues for every field
+  that endpoint doesn't return. The Streamlit app shows a note on any campaign checked
+  this way so it's clear the result is partial, not a clean pass.
+- **RCS has no API at all** - confirmed by MoEngage Support, who suggested filing a
+  [feature request](https://www.moengage.com/docs/user-guide/contact-support/suggest-a-feature#how-does-this-help).
+- **In-App and On-Site Messaging (OSM) have no *campaign-level* API** - confirmed by
+  MoEngage Support - but do have *template-level* APIs
+  (`/custom-templates/inapp`, `/custom-templates/osm`) for managing the creative content
+  of In-App/OSM messages. That's a different kind of integration (template CRUD, not
+  campaign search) and isn't wired into this tool yet - worth a future pass if
+  template-content QA (as opposed to full campaign QA) would be useful.
+
+`RCS`, `INAPP`, `OSM`, and `ON_SITE_MESSAGING` are listed in `UNAVAILABLE_CHANNELS` so
+selecting them raises a clear explanation instead of a confusing raw API error.
 
 All of this is config-driven from `qa_rules.json` — edit it on GitHub's website, no
 redeploy needed, same as before.

@@ -426,16 +426,19 @@ st.caption(f"Using the account entered above for **{client_key}**.")
 st.subheader("Step 2: Select channel to QA")
 channel = st.selectbox(
     "Channel",
-    ["All", "PUSH", "EMAIL", "INAPP", "OSM", "SMS", "WHATSAPP"],
+    ["All", "PUSH", "EMAIL", "SMS", "WHATSAPP", "RCS", "INAPP", "OSM"],
     index=0,
     key="channel_select",
     help=(
         "QA checks are applied based on this client + channel combination - each channel "
         "gets its own set of specific, meaningful checks (not just present/not-present). "
-        "WHATSAPP confirmed supported by MoEngage support for the V5 Search Campaigns API. "
-        "It's newly added and not yet content-checked in as much detail as Email/Push - "
-        "if a WhatsApp check looks wrong, share the output and it'll get tightened up the "
-        "same way Email was."
+        "Availability differs by MoEngage's own API, not this tool: PUSH, EMAIL, and SMS "
+        "get full checks (content, targeting, control group, delivery controls, goals, "
+        "connector). WHATSAPP gets full checks too if this account has MoEngage's V5 API "
+        "access set up - otherwise it automatically falls back to naming + tags only. "
+        "RCS, INAPP, and OSM aren't available through any MoEngage campaigns API at all "
+        "yet (per MoEngage Support) - selecting one of these shows a clear message rather "
+        "than results."
     ),
 )
 

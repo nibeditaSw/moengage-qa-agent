@@ -11,9 +11,9 @@
       },
       {
         "name": "ADH client (SMS/Email/WhatsApp)",
-        "regex": "^ADH_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_OMNI_(SMS|EMAIL|WA)_WK[0-9]{1,2}_[0-9]{8}$",
-        "example": "ADH_AND_CAMPAIGNLAUNCHAFTERH_DORMANT_NORTHREGULAR_OMNI_SMS_WK19_07082026",
-        "note": "Format: ADH_<BrandName>_<Creative>_<Cohort[_Region]>_OMNI_<Channel>_WK<week>_<DDMMYYYY>. OMNI is a fixed literal segment (ignored for meaning, but required in the name). Channel token is 'SMS'/'EMAIL'/'WA' (WA = WhatsApp) - separate from the API's 'channel' field which returns 'WHATSAPP'. Confirmed against 3 real examples (SMS, Email, WhatsApp) - flag if a legitimately-named campaign from this client ever gets rejected, since this was built from field descriptions rather than a large sample."
+        "regex": "^ADH_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_OMNI_(SMS|EMAIL|WA)_WK[0-9]{1,2}_[0-9]{8}(?:_+(?:Static|Dynamic))?$",
+        "example": "ADH_GD_FESTIVEREFRESH_DORMANT_2TS_OMNI_SMS_WK26_25092026_Static",
+        "note": "Format: ADH_<BrandName>_<Creative>_<Cohort[_Region]>_OMNI_<Channel>_WK<week>_<DDMMYYYY>[_Static|_Dynamic]. OMNI is a fixed literal segment (ignored for meaning, but required in the name). Channel token is 'SMS'/'EMAIL'/'WA' (WA = WhatsApp) - separate from the API's 'channel' field which returns 'WHATSAPP'. The trailing _Static/_Dynamic is optional (ANDGD_IND's SMS names use it, HOAD's Email names don't) - the regex also tolerates one or more underscores before it, since a real ANDGD_IND SMS campaign had a double underscore there (...01102026__Static) that looked like a one-off typo rather than the actual convention."
       }
     ],
     "note": "A campaign passes if its name matches ANY pattern above - lets multiple clients/teams with different naming conventions share this same QA tool without conflicting."
@@ -337,6 +337,34 @@
         },
         "delivery_controls": {
           "campaign_throttle_rpm_required": 1000
+        },
+        "connector": {
+          "required": true
+        },
+        "conversion_goal_attribution_hours_required": 7
+      },
+      "SMS": {
+        "tags_must_match_named_segments": {
+          "name_regex": "^(ADH)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)_OMNI_(SMS|EMAIL|WA)_WK([0-9]{1,2})_([0-9]{8})(?:_+(?:Static|Dynamic))?$",
+          "tag_segments": [
+            {"group": 1, "label": "campaign type", "value_map": {"ADH": "Adhoc"}},
+            {"group": 2, "label": "brand"},
+            {"group": 3, "label": "creative"},
+            {"group": 5, "label": "channel"},
+            {"group": 6, "label": "week", "template": "WK{}"}
+          ],
+          "require_extra_unmatched_tag": true
+        },
+        "exclude_filters": {
+          "required": true,
+          "must_have_custom_segment_exclusion": true
+        },
+        "control_group": {
+          "global_required": true
+        },
+        "delivery_controls": {
+          "campaign_throttle_rpm_required": 10000,
+          "ignore_frequency_capping_must_be": false
         },
         "connector": {
           "required": true
